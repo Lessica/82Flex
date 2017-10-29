@@ -1,0 +1,2 @@
+public/usr/uploads filter=lfs diff=lfs merge=lfs -text
+public/usr/static filter=lfs diff=lfs merge=lfs -text
