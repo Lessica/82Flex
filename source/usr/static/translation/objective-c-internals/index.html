@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" type="text/css" href="css/style.css" />
+		<title>Objective-C 的底层实现</title>
+	</head>
+<body>
+
+<p><a href="./objective-c-internals.pdf">下载原文</a></p>
+<p><a href="./00595279.pdf">Jim Blinn's "Floating-Point Tricks"</a></p>
+
+<h1>Objective-C 的底层实现</h1>
+
+<hr />
+
+<p>作者：André Pang, Realmac Software</p>
+
+<p>翻译：i_82 &lt;i.82@me.com&gt;</p>
+
+<hr />
+
+<figure><img src="QQ20160517-3.png"/></figure>
+
+<p>一块很棒的牌照，不是么？</p>
+
+<p>在这次讨论中，我们掀开引擎盖 (peek under the hood)，来看看 Objective-C 的引擎 —— 对象在内存中是如何表示的，而消息发送又是如何工作的。</p>
+
+<h2>什么是对象</h2>
+
+<p>要理解对象到底是什么，我们需要深入到 (dive down to) 对象的最底层：对象在内存中实际上看起来像什么；要理解 Objective-C 的内存模型，还必须先理解 C 的内存模型……</p>
+
+<p>一个简单的例子：这是 C 语言中一个 int 类型的数据在 32 位的机器中的表示。32 bits = 4 bytes，所以 int 应该看起来像这样：</p>
+
+<figure><img src="QQ20160517-4.png"/></figure>
+
+<hr />
+
+<p>实际上，int 在基于 Intel CPU 的 Mac 上（或 ICBMs，我一般这样说），应该看起来像这样，因为 ICBMs 都是小端序的 (little-endian, <a href="https://en.wikipedia.org/wiki/Endianness" title="字节序在维基百科上的解释">字节序在维基百科上的解释</a>)：</p>
+
+<figure><img src="QQ20160517-5.png"/></figure>
+
+<p>但是为了方便理解，我们在这篇文章中，假设内存布局是大端序，因为它更容易理解。</p>
+
+<hr />
+
+<figure><img src="QQ20160517-6.png"/></figure>
+
+<p>如图，这是包含了一个 int 的 C 语言结构体。从内存布局的角度来说，存放一个单独 int[1] 的结构体看起来与一个 int 是一模一样的。这一点非常重要，因为这意味着你可以在一个 IntContainer 和一个具有特定值的 int 之间进行强制转换 (cast between) 而不产生精度损失 (loss of precision)。这也是 Core Foundation 和 Cocoa 的免费桥 (toll-free bridging) 是如何运作的：一个 CFType 拥有着和一个 NSObject 完全一样的内存布局。</p>
+
+<p>[1]: 也许在 C 语言定义当中有一些地方，会让它在一个运行着一个操蛋编译器的操蛋的平台上成为伪命题，但是我希望你不是在一台 <a href="https://en.wikipedia.org/wiki/User:CompuHacker/CHDS9000">DeathStation 9000</a> 上码代码。</p>
+
+<hr />
+
+<figure><img src="QQ20160517-7.png"/></figure>
+
+<p>这是一个稍微复杂点的例子，一个你可能之前已经用过成百上千次的东西：Cocoa 的 NSPoint 结构，它包含了两个 CGFloat (一个 CGFloat 在 32 位平台上是 float 的别名，而在 64 位平台上它是 double 的别名)。那么，一个包含了超过一个字段的结构体看起来更像什么呢？</p>
+
+<p>并不复杂。它仅仅是一个值紧挨着另一个值存放在内存中罢了。换种说法，就是毗邻 (contiguous) (也许对于值的对齐和补齐，会有一些额外的规则，但它们实在很无聊，并且我们这里暂时不做讨论)。</p>
+
+<p>这里也许你会注意到浮点数在内存中，和更常见的整型在内存中相比，看起来几乎是完全不同的；如果你感兴趣，这里有两篇文章非常值得一读：<a href="http://perso.ens-lyon.fr/jean-michel.muller/goldberg.pdf">What Every Computer Scientist Should Know About Floating-Point Arithmetic</a> (译者注：还有一篇修改和重印版，看起来更加舒适，<a href="https://ece.uwaterloo.ca/~dwharder/NumericalAnalysis/02Numerics/Double/paper.pdf">Edited reprint here</a>)，还有 Jim Blinn 的很难找但是真的很值得一看的 (much-harder-to-find-but-oh-so-worth-it) <a href="http://ieeexplore.ieee.org/xpl/articleDetails.jsp?arnumber=595279">Floating-Point Tricks</a>，它能告诉你如何用更快速的位运算来处理浮点数的平方根或乘方运算。</p>
+
+<hr />
+
+<figure><img src="QQ20160517-8.png"/></figure>
+
+<p>这是一个指针：它指向了内存中另一个特定数据类型的位置。在这个例子中，这里的 pi 包含了一个十六进制数值 0x08039170，而 * 操作符对指针进行了间接寻址，并且设定了被指向内存地址的值。所以，在这个例子中，内存地址 0x08039170 处的值，包含了我们想要的实际整型。</p>
+
+<hr />
+
+<p>现在我们已经有能力看看 Objective-C 的类定义，并且讨论一下对象在内存中的表现形式了。现在在终端中输入：</p>
+
+<pre><code>open -h NSObject.h
+</code></pre>
+
+<p>你就能看到 NSObject.h 头文件，包含了 NSObject 根对象的定义，它长这样：</p>
+
+<pre><code>@interface NSObject &lt;NSObject&gt; {
+   Class isa;
+}
+</code></pre>
+
+<hr />
+
+<p>Objective-C 中的 @interface 关键字只是用来声明一个同名结构体的更美观的方式，而且这样做还能告诉编译器，我们给定的这个名字，它是一个 Objective-C 的类名。换句话说，一个 NSObject 简单来说就是有一个字段的结构体，而这个字段叫做 isa (&quot;is a&quot;, i.e. &quot;a car is a vehicle&quot;)，似乎指向了一个仿佛 (some sort of) 叫做 Class 的类型，那么这个 Class 又是什么呢？</p>
+
+<pre><code>struct NSObject {
+   struct objc_class* isa;
+}
+</code></pre>
+
+<p>事实证明 (turns out)，Class 在 &lt;objc/objc.h&gt; 中被定义成结构体 objc_class 指针的别名，也就是 objc_class*。换句话说，一个 NSObject 只是一个指向了 Objective-C 类定义的指针：它确实如此。</p>
+
+<hr />
+
+<pre><code>struct NSObject {
+   struct objc_class* isa;
+}
+struct objc_class {
+   Class isa;
+   Class super_class; const char *name; long version;
+   long info;
+   long instance_size;
+   struct objc_ivar_list *ivars;
+   struct objc_method_list **methodLists; struct objc_cache *cache;
+   struct objc_protocol_list *protocols;
+}
+</code></pre>
+
+<p>所以，下一个问题是，一个 Objective-C 类应该是什么样的。在你的 Mac 的 /usr/include/objc 目录里到处搜索一下，你会发现它看起来应该是这样[2]。这里包含了所有的信息，Objective-C 运行时去做几乎所有与对象有关的事情所需要的信息：寻找出它应该遵循 (conforms to) 的协议 (protocol)，它有哪些方法 (methods)，示例变量 (instance variables, ivars) 在内存中的布局，它的基类是什么，等等。</p>
+
+<p>一个有趣的事情是，objc_class 结构体中的第一个字段和 NSObject 结构体中那唯一的一个字段类型是一样的。这意味着 objc_class 本身，它也是一个对象，因为它的内存模型是一样的；因此，所有的 Objective-C 操作 —— 例如消息发送 (message sending) —— 在实例对象上和类对象上起着同样的作用。这提升了一致性 (uniformity)，也意味着可以用更少的特例代码，来处理类对象和实例对象之间的差异。但是这样的话，类对象的 isa 字段又指向了什么呢？</p>
+
+<p>类对象的 isa 字段指向了一个叫做元类 (metaclass) 的对象，正如这个字段的类型所表示的，也仅仅是另一个 objc_class 的结构体。因此，每一个类定义包含了一个类对象和一个 metaclass 对象。它的根本原因是，一个类对象的方法列表是为了这个类的实例而存在的 (a class object’s list of methods are for instances of that class)，也就是说，类对象的 methodList 字段包含了实例方法 (instance method, 即声明中以 - 开头的方法) 的信息；而 metaclass 对象的 methodList 字段则包含了类方法 (class method, 即声明中以 + 开头的方法) 的信息。同样的，这也提升了一致性，并且减少了为之编写特例代码的需求。</p>
+
+<p>当然，下一个问题又来了，metaclass 对象的 isa 字段也指向另一个 metaclass 对象么？显然不。并没有一个叫做 metaclass 的方法，也没有 metametaclass 这种东西。所以 metaclass 对象的 isa 字段仅仅是指向了它自己，终结了循环。</p>
+
+<p>[2]: 在实际的头文件中，你将会看到这样的结构布局在 Objective-C 2.0 中被弃用 (deprecated) 了，为了使得这种结构不公开 (opaque)。这让 Objective-C 工程师能够为它修改布局，或者添加/移除字段；你只需简单地用 class_getName() 和 class_setName()，而不需要通过 myClass-&gt;name 来直接访问结构体的值。尽管在底层，Objective-C 2.0 中对于 objc_class 结构体的定义和我们所说的应该是极为相似的。</p>
+
+<hr />
+
+<pre><code>struct NSObject {
+   struct objc_class* isa;
+}
+struct objc_class {
+   Class isa;
+   Class super_class; const char *name; long version;
+   long info;
+   long instance_size;
+   struct objc_ivar_list *ivars;
+   struct objc_method_list **methodLists; struct objc_cache *cache;
+   struct objc_protocol_list *protocols;
+}
+</code></pre>
+
+<p>作为证明，让我们深入 gdb (The GNU Project Debugger)，悄悄地看看 (peek) 运行的应用中，NSApp 这个全局变量 (global variable)。首先，你能看到 NSApp 是什么，确实，只是一个指向了 objc_object 结构体的指针。(请记住在 Objective-C 中，所有的对象引用都是指针。）对 NSApp 进行追踪，它的确有一个 isa 字段，并且 isa 指向了一个内存地址 0x15f8e0。追踪这个地址，你能看到这个类的一些细节，比如一个 NSApp 实例的尺寸，这个类的名称是什么。这里，我们推测 *NSApp-&gt;isa-&gt;isa 是 RWApplication 元类，而 *NSApp-&gt;isa-&gt;superclass 是 NSApplication 类，也就是 RWApplication 的子类。</p>
+
+<pre><code>(gdb) p NSApp
+$2 = (struct objc_object *) 0x8039170
+(gdb) p *NSApp $3 = {
+isa = 0x15f8e0 }
+(gdb) p NSApp-&gt;isa
+$4 = (struct objc_class *) 0x15f8e0
+(gdb) p *NSApp-&gt;isa
+$5 = {
+   isa = 0x160de0,
+   super_class = 0x22d3ea0,
+   name = 0x1322de &quot;RWApplication&quot;, version = 0,
+   info = 12206145,
+   instance_size = 100,
+   ivars = 0x169720,
+   methodLists = 0x80391e0,
+   cache = 0x809d710,
+   protocols = 0x15b064
+}
+</code></pre>
+
+<hr />
+
+<pre><code>@interface NSObject {
+   Class isa;
+}
+
+struct NSObject {
+   Class isa;
+}
+
+@interface MySubclass : NSObject {
+   int i;
+}
+
+struct MySubclass {
+   Class isa;
+   int i;
+}
+
+@interface MySubsubclass : MySubclass {
+   float f;
+}
+
+sturct MySubsubclass {
+   Class isa;
+   int i;
+   float f;
+}
+</code></pre>
+
+<p>对于子类来说，每一个实例变量都仅仅是追加在了它继承的类的后面。在这个例子中，MySubsubclass 继承了 MySubclass，而 MySubclass 继承了 NSObject。所以，按顺序来说，它先包含了 NSObject 中所有的实例变量，然后包含了 MySubclass 中所有的实例变量，最后包含了它自己类定义中声明的实例变量。</p>
+
+<h2>消息</h2>
+
+<p>现在我们已经知道对象在内存中是如何存储的了，让我们谈论另一个有趣的事情：消息发送。</p>
+
+<pre><code>@implementation NSMutableString
+- (void)appendString:(NSString *)aString {
+   ;
+}
+@end
+</code></pre>
+
+<p>首先，方法 (method) 是什么？我们刚刚从 C 语言的角度讨论了 Objective-C 中的对象，让我们也从 C 语言的角度讨论 Objective-C 中的方法。</p>
+
+<p>当你在 @implementation ... @end 块之间用代码定义了一个方法，编译器实际上将它转变 (transforms that into) 成了一个标准的 C 语言函数 (function)。</p>
+
+<pre><code>void -[NSMutableString appendString:](id self, SEL _cmd, NSString* aString) {
+   ;
+}
+</code></pre>
+
+<p>这个 C 函数中，唯一的两点不同是，它有着两个额外的参数 —— self 和 _cmd，并且它的函数名当中存在一些正常情况下 C 函数名称规范中不允许的字符 (如 -, [ 和 ])。尽管除此之外，它的的确确是一个彻底的、标准的 C 函数，如果你通过某种方式得到了指向这个函数的函数指针，你甚至能像调用其它 C 函数那样去调用它。</p>
+
+<p>额外的两个参数能够告诉你如何访问方法中“隐藏的” self 和 _cmd 两个变量。(大家都用过 self，但实际上 _cmd 也是存在的，你能够用它做一些很时髦的事情。)</p>
+
+<p>请注意在 Objective-C 语法中，方法的实际 C 函数实现被称为 IMP，我们后面会用到这个名词。</p>
+
+<hr />
+
+<pre><code>% nm /usr/lib/libSystem.dylib | grep strcmp
+00009eb0 T _strcmp
+</code></pre>
+
+<p>然后，作为证明，如果你用命令行工具 nm 来转储 (dump) 二进制可执行文件 (binary) 的符号 (symbol)，你就能发现 Objective-C 的方法确实就是 C 函数，只是有不同的名字罢了。在 Mac OS X 上，C 函数的符号名称前都会有 __，但是相比而言，Objective-C 方法的 C 函数符号名中却没有。</p>
+
+<pre><code>% nm Foundation.framework/Foundation | grep &#39;NSString compare
+0002bbf0 t -[NSString compare:]
+0006c200 t -[NSString compare:options:]
+0000d490 t -[NSString compare:options:range:]
+0000d4e0 t -[NSString compare:options:range:locale:] 
+</code></pre>
+
+<hr />
+
+<pre><code>[string appendString:@&quot; (that&#39;s what she said)&quot;];
+</code></pre>
+
+<p>现在我们看看，当你用 [...] 语法向一个对象发送消息的时候会发生什么呢？编译器实际上将其转换为了对一个叫做 objc_msgSend() 的函数调用，而这是 Objective-C 运行时机制[1]的一部分。objc_msgSend() 至少需要两个参数：接收消息的对象（在 Objective-C 语法中称为 receiver）和一个叫做“选择器 (selector)”的东西：用术语 (jargon) 讲呢，就是“方法名”。</p>
+
+<pre><code>objc_msgSend(string, @selector(appendString:), @&quot; (that&#39;s what she said)&quot;);
+</code></pre>
+
+<p>从概念上讲，你可以将选择器简单地看成是一段 C 字符串；实际上，选择器的确是一段 C 字符串：它有着与 C 字符串相同的内存模型 —— 以 NULL 结尾的 char* 型指针 —— 正如我们的 IntContainer 有着与一个简单的 int 完全相同的数据结构一样，选择器与 C 字符串之间唯一的区别是，Objective-C 的运行时机制确保了每一个选择器只有唯一的实例 —— 即每一个方法名有着它唯一的实例 —— 在整个的内存地址空间当中。</p>
+
+<p>(译者注：现在我们讨论下，如果不确保它的唯一性，会产生怎样的后果。) 如果只是简单地使用 char* 作为方法名，就可能会用到两个同样指向 &quot;appendString:&quot; char* 的指针，但是它们 (residing at) 可能会存在于不同的内存地址 (打个比方，0xdeadbeef 和 0xcafebabe)。这意味着测试两个方法名是否相同时，需要用到 strcmp()，也就是一个字符一个字符地 (character-by-character) 去比较；如果这样做的话，哪怕你只是想简单地执行一次函数调用，都得做这么一次既慢又滑稽可笑 (hilariously) 的事情。</p>
+
+<p>通过确保每一个选择器都有一个独立且唯一的内存地址，选择器的比较就被简化成了指针的比较 (selector equality can simply be done by a pointer comparison)，这样就快多了。</p>
+
+<p>因此，相比直接用 char* 而言，选择器有一个不同的类型 SEL，并且你需要用到 sel_registerName() 函数来将 C 字符串“转换”成选择器 (译者注：实际上用“修饰”一词更准确。)。</p>
+
+<p>这里有一点需要注意的，objc_msgSend() 是一个参数数量可变的函数 (var-args function)，前两个参数之后的其余参数都是消息参数。</p>
+
+<p>[1]: Objective-C 运行时仅仅是一个叫做 objc 的 C Library，你可以像链接其它任何 C Library 一样链接它，它存放于 /usr/lib/libobjc.dylib</p>
+
+<hr />
+
+<pre><code>objc_msgSend(string, @selector(appendString:), @&quot; (that&#39;s what she said)&quot;);
+</code></pre>
+
+<p>那么，objc_msgSend() 的实现又是怎样的呢？从概念上讲，它可能看起来像这样：</p>
+
+<pre><code>IMP class_getMethodImplementation(Class cls, SEL name);
+id objc_msgSend(id receiver, SEL name, arguments...) {
+   IMP function = class_getMethodImplementation(receiver-&gt;isa, name);
+   return function(arguments);
+}
+</code></pre>
+
+<p>只不过，在实际情况下，它是经过了人工定制化 (hand-rolled) 与汇编 (assembly) 层面的高度优化 (highly optimised) 的。因为它是一个执行起来需要非常快的函数。Objective-C 运行时有一个叫做 class_getMethodImplementation() 的方法，能通过传入一个类对象和一个选择器，使它返回 IMP —— 也就是该方法的 C 函数实现。而这个方法只是简单地遍历了那个类的方法列表，找到与传入参数相同的选择器，然后返回匹配该选择器的 IMP。现在你已经有一个 IMP 了，而 IMP 实际上只是一个 C 函数指针，你也能够像调用别的 C 函数一样调用它。</p>
+
+<p>所以，所有的 objc_msgSend() 所做的，只是通过 isa 字段抓出 (grab) 接收者 (receiver) 的类对象，找到选择器所匹配的 IMP，然后 bang 地一下，我们把消息发出去了。这就是它最真实的样子，没有别的黑魔法了 (no more black magic)。</p>
+
+<h2>动态和反射</h2>
+
+<p>Objective-C 的内存模型和消息发送含义有一些非常有趣的结果。</p>
+
+<p>首先，因为类对象包含了关于它实现的所有方法，以及类名称等等的信息，并且这些信息是能够通过 Objective-C 运行时接口 (APIs) 来访问的。也就是说，这门语言是具有反射性的，又名 (also known as, a.k.a) 内省性 (introspective)，这意味着你可以找出关于这个类的层次结构。我们能够得到一整个类的层次结构信息，举个例子，你能够找出某个类一共有多少个方法。</p>
+
+<p>其次，因为通过接口能够修改类对象，又因为消息发送是通过一个 C 函数 (tunnelled through a single C function) 实现的，所以这门语言是高度动态的 (highly dynamic)。你能够在运行时添加一些类，甚至用你自己的方法，去替换掉一些预定义的方法实现。Objective-C 消息机制也允许对象“有第二次机会”响应消息：如果你发送给对象一个消息而它无法理解，运行时机制会唤起一个叫做 forwardInvocation: 的方法 (在 Objective-C 2.0 中，它叫做 +resolveInstanceMethod:)，并将你想发送的消息有关的信息传递给它，然后使对象能够对这些消息做一些后续的处理 (do whatever it likes with the message)，比如将它们传递给另一个对象 (forward it to another object)。</p>
+
+<p>这样的能力使得 Objective-C 与一些更为知名的动态语言和脚本语言组成了联盟，比如 Perl，Python，Ruby，PHP (译者注：世界上最好的语言) 和 JavaScript。最主要的区别是，Objective-C 会被编译为机器码 (不要在这里卖弄 JIT 引擎，谢谢)。尽管如此，它仍然能与其他的脚本语言一样保持动态性，这实在是难能可贵 (It&#39;s pretty much)。作为比较，C++ 从根本上来说没有内省性 (introspection) (Run-Time Type Identification, RTTI 机制除外)，也没有动态性；尽管 Java 除了没有 -forwardInvocation: 这样的等价替代物 (equivalent)，反射接口复杂而冗长之外，在反射性和动态性上都与 Objective-C 很相似；而譬如 COM &amp; CORBA 这样的东西，给 C++ 或多或少地 (more-or-less) 胡乱塞入 (shovelled on top of it) 了一些类似于 Objective-C 的功能，使其有了一些动态性和反射性，但不可否认的是，这实在太丑陋而且糟糕透了 (butt-ugly and it sucks)。</p>
+
+<figure><img src="QQ20160522-0@2x.png"/></figure>
+
+<p>通过阅读 Apple 提供的 <a href="https://developer.apple.com/library/mac/documentation/Cocoa/Reference/ObjCRuntimeRef/index.html">Objective-C 2.0 Runtime Reference</a> 文档，你能够得到更多关于 Objective-C 运行时机制的信息。如图所示，这儿有一大堆 (an extensive amount of) C 函数，你可以在运行时中尝试着调用它们 (peek &amp; poke)。</p>
+
+<h2><a href="https://github.com/andrep/RMModelObject">RMModelObject</a></h2>
+
+<pre><code>@interface MyBlogEntry : NSObject {
+   NSString* _title; NSCalendarDate* _postedDate; ...
+}
+@property (copy) NSString* title;
+@property (copy) NSCalendarDate* postedDate; @property (copy) NSAttributedString* bodyText; @property (copy) NSArray* tagNames; @property (copy) NSArray* categoryNames; @property BOOL isDraft;
+@end
+- (NSString*)title; (void)setTitle:(NSString*)value; ... - (BOOL)isEqual:(id)other;
+- (id)copyWithZone:(NSZone*)zone;
+- (id)initWithCoder:(NSCoder*)decoder;
+- (void)encodeWithCoder:(NSCoder*)encoder; - (void)dealloc;
+</code></pre>
+
+<p>高度动态性的运行时除了让 Objective-C 变得很酷以外，实际上也让它变得很实用。Ruby 因大量使用元编程技术 (metaprogramming techniques) 来实现一些例如 ActiveRecord 这样很酷的东西而闻名。这里，我们在一个叫做 RMModelObject 的类中，充分利用了 (utilise) Objective-C 的反射性和动态性功能。它专为编写简单的模型类而设计。</p>
+
+<p>举个例子，如果你正在编写一个网站搭建程序 (?that may or may not rhyme with WapidReaver) 并且想为博客入口建立模型，你也许会设计一些譬如 title, postedDate, bodyText, tagNames 这样的字段。但是那时你会意识到你必须：</p>
+
+<ol>
+	<li>声明实例变量以作为 (serve as) 属性的后备存储 (backing stores)</li>
+	<li>为所有的属性编写访问器 (accessors)</li>
+	<li>实现 -isEqual: 和 -hash</li>
+	<li>编写 -copyWithZone:</li>
+	<li>为 NSCoding 支持编写 -initWithCoder: 和 -encodeWithCoder:</li>
+	<li>编写 -dealloc 来正确释放所有的实例变量</li>
+</ol>
+
+<p>现在看上去这些事情并不是很有趣了吧？</p>
+
+<hr />
+
+<pre><code>@interface MyBlogEntry : RMModelObject {
+   ;
+}
+@property (copy) NSString* title;
+@property (copy) NSCalendarDate* postedDate; @property (copy) NSAttributedString* bodyText; @property (copy) NSArray* tagNames; @property (copy) NSArray* categoryNames; @property BOOL isDraft;
+@end
+@implementation MyBlogEntry
+@dynamic title, postedDate, bodyText, tagNames, categoryNames, isDraft;
+@end
+</code></pre>
+
+<p>有了 RMModelObject，你所需要做的所有事情是，将你的属性在 @implementation 上下文中声明为 @dynamic 类型，然后只需要屏蔽一些编译器警告 (silence some compiler warnings) 就可以了：RMModelObject 完成了剩下的事情。它动态地为你创建了一个新的类，为类添加了实例变量和访问器方法，并且实现了其它例如 -initWithCoder:, -encodeWithCoder: 这样必需的方法。如果你需要一个好的用例和一些示例代码来学习如何使用 Objective-C 2.0 运行时接口，RMModelObject 也许是一个好的学习例子。</p>
+
+<p>其它充分利用了 Objective-C 2.0 运行时机制的、非常酷的工程有 <a href="https://github.com/supermarin/ObjectiveRecord">Objective-C port of ActiveRecord</a> 和 <a href="https://code.google.com/archive/p/sqlitepersistentobjects/">SQLitePersistentObjects</a>，去看看吧。</p>
+
+<h2>高阶消息</h2>
+
+<p>现在，我终于有机会说出我最喜欢的两个词了：higher order……</p>
+
+<hr />
+
+<pre><code>@implementation NSArray (Mapping)
+// Usage:
+// NSArray* result = [myArray map:@selector(uppercaseString:)];
+- (NSArray*)map:(SEL)selector {
+   NSMutableArray* mappedArray = [NSMutableArray array];
+   for (id object in self) {
+       id mappedObject = [object performSelector:selector];
+       [mappedArray addObject:mappedObject];
+   }
+   return mappedArray;
+}
+@end
+</code></pre>
+
+<p>这是一个新的 NSArray 方法，它叫做 map。它很简单：传入一个选择器，对数组中的每一个元素都调用了这个选择器，并且返回一个包含了调用结果的新 NSArray。这段代码在这里并不重要，重要的是这里用到的通用概念 (general concept)。如果你懂一点 Smalltalk，这在 Smalltalk 语法中一贯被称作 collect (map 是来自函数式编程世界的动词)。</p>
+
+<hr />
+
+<pre><code>NSArray* result = [myArray map:@selector(uppercaseString:)]; 
+</code></pre>
+
+<p>但是，-map: 方法的语法看上去既冗长又笨重。如果我们能用更短的 &quot;[[myArray map] uppercaseString]&quot; 来代替 &quot;[myArray map:@selector(uppercaseString:)]&quot; 是不是更好呢？</p>
+
+<pre><code>NSArray* result = [[myArray map] uppercaseString];
+</code></pre>
+
+<p>Marcel Weiher 和一个在 cocoadev.com 网站上，由 Objective-C 开发者组成的商业化组织将这种技术称为“高阶消息”。下面简要介绍了一下，关于这种技术是如何工作的细节。</p>
+
+<ol>
+	<li>-map 创建了一个代理对象 trampoline</li>
+	<li>trampoline 接收到了 -uppercaseString: 消息</li>
+	<li>trampoline 将 -uppercaseString: 发送给原始数组中的每一个对象，然后收集结果</li>
+	<li>trampoline 返回了新数组</li>
+</ol>
+
+<pre><code>id tramponline = [myArrap map];
+NSArray* result = [trampoline uppercaseString];
+</code></pre>
+
+<p>但愿这样的解释已经足够清楚了。</p>
+
+<hr />
+
+<pre><code># 多线程 (Threading) 1:
+[[earth inBackground] computeAnswerToUniverse];
+[[window inMainThread] display];
+# 多线程 (Threading) 2:
+[myArray inPlaceMergeSort]; // 同步的 (synchronous)
+[[myArray future] inPlaceMergeSort]; // 异步的 (asynchronous)
+# 平行遍历 (?Parallel Map):
+[[myArray parallelMap] uppercaseString];
+# 控制流 (Control Flow):
+[[myArray logAndIgnoreExceptions] stupidMethod];
+</code></pre>
+
+<p>除了函数式编程风格 (functional-programming-style) 的遍历 / 折叠 / 过滤收集函数外，这里有高阶消息的许多其它用例。</p>
+
+<hr />
+
+<p>关于高阶消息的更多信息，只需要 Google 一下：你能够找到 <a href="http://www.metaobject.com/papers/Higher_Order_Messaging_OOPSLA_2005.pdf">Marcel Weiher 和 Stéphane Ducasse 提交到 OOPSLA 2005 上关于它的论文</a>。论文解释了 HOM 和其它更多传统的高阶函数之间细微的差异，比我讲的不知道高到哪里去了。</p>
+
+<h2>致谢</h2>
+
+<p>所有的图片版权都归原作者所有，我们是从 Google Image Search 上找到它们的。</p>
+
+<h2>联系</h2>
+
+<p>感谢在场的听众，如果你有任何疑问，当然，请联系我。</p>
+
+<p>Website: <a href="http://algorithm.com.au">http://algorithm.com.au</a></p>
+
+<p>Email: <a href="mailto://ozone@algorithm.com.au">ozone@algorithm.com.au</a></p>
+
+<p>Twitter: <a href="https://twitter.com/AndrePang">https://twitter.com/AndrePang</a></p>
+
+</body>
+</html>
+
