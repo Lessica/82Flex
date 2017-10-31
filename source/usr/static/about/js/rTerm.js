@@ -213,7 +213,11 @@ rTerm = function (options) {
         } else if (dstname.startsWith("~")) {
             path = this.fsstart + "/" + dstname.slice(1);
         } else {
-            path = this.cdir + "/" + dstname;
+            if (this.cdir == "/") {
+                path = this.cdir + dstname;
+            } else {
+                path = this.cdir + "/" + dstname;
+            }
         }
         if (path.endsWith("/")) {
             path = path.slice(0, -1);
