@@ -163,6 +163,7 @@ rTerm = function (options) {
     }).bind(this);
 
     this.enterCallback = (function () {
+        this.input = $.trim(this.input);
         if (this.input == '')
         {
             this.emptyCallback();
@@ -284,9 +285,17 @@ rTerm = function (options) {
     }).bind(this);
 
     this.catCallback = (function(args) {
-        var data = this.getByPath(args[1])[0];
+        if (args.length < 2 || args[1].length === 0) {
+            this.oldInput += this.termPrev + this.input + '<br>';
+            this.input = '';
+            this.nStrings += 2;
+            this.updateTerm();
+            return;
+        }
+        var dstname = args[1];
+        var data = this.getByPath(dstname)[0];
         if (data == '' || typeof data === 'undefined') {
-            this.oldInput += this.termPrev + this.input + '<br>' + this.input + ": No such file or directory" + '<br>';
+            this.oldInput += this.termPrev + this.input + "<br>cat: No such file or directory: " + dstname + '<br>';
         } else {
             if (data.startsWith("_call:")) {
                 var args = data.slice(6, ).split(" ");
@@ -315,7 +324,7 @@ rTerm = function (options) {
         }
         var [data, path] = this.getByPath(dstname);
         if (typeof data === 'undefined') {
-            this.oldInput += this.termPrev + this.input + '<br>' + this.input + ": No such file or directory" + '<br>';
+            this.oldInput += this.termPrev + this.input + "<br>cd: No such file or directory: " + dstname + '<br>';
             this.input = '';
             this.nStrings += 2;
         } else if (typeof data === 'string') {
