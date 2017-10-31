@@ -1,8 +1,3 @@
-<<<<<<< HEAD:source/usr/static/about/js/rTerm.js
-version https://git-lfs.github.com/spec/v1
-oid sha256:d7d25a125ac888765216be98b0757cadf73da6a9aa5ccb83f277af0ca24b9d20
-size 13396
-=======
 /*
 Just a tool for links representation
 Needs a JQuery
@@ -425,4 +420,3 @@ rTerm = function (options) {
     this.init();
     return this;
 }
->>>>>>> d835a7ffdf5d3f2715b839333451792553e6692e:source/static/about/js/rTerm.js
