@@ -1,5 +1,5 @@
 ---
-title: iOS SDK Bug - App crashes if a xib file has almost the same name as a view controller
+title: 不要给 xib 文件取一个和别的 ViewController 相似的名字
 date: 2017-11-27 16:13:18
 tags: [iOS,Bugs]
 ---
@@ -9,7 +9,7 @@ tags: [iOS,Bugs]
 Cannot display a view controller if the bundle contains another xib file with the same name minus "Controller". 
 Example: "LittleViewController.xib" and "LittleView.xib"
 
-如果 App Bundle 中存在一个与 "LittleViewController" 名称相似的 "LittleView.xib", 则该 "LittleViewController" 将无法载入, 表现为崩溃.
+如果 App Bundle 中存在一个与 "LittleViewController" 名称相似、重名的 "LittleView.xib", 则该 "LittleViewController" 将无法载入, 表现为崩溃.
 
 # Crash logs 错误日志
 

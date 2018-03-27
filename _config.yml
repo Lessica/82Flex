@@ -12,7 +12,7 @@ timezone: Asia/Shanghai
 
 # URL
 ## If your site is put in a subdirectory, set url as 'http://yoursite.com/child' and root as '/child/'
-url: http://82flex.com
+url: https://82flex.com
 root: /
 permalink: :year/:month/:day/:title/
 permalink_defaults:
@@ -77,12 +77,21 @@ theme: cactus-dark
 # Deployment
 ## Docs: https://hexo.io/docs/deployment.html
 deploy:
-  type: rsync
+- type: rsync
   host: 115.28.214.126
   user: root
   root: /home/www
-  port: 22
+  port: 58422
   delete: true
   verbose: true
   ignore_errors: false
+- type: baidu_url_submitter
 
+baidu_url_submit:
+  count: 10
+  host: www.82flex.com
+  token: Porijj6UYywwPEfn
+  path: baidu_urls.txt
+
+sitemap:
+    path: sitemap.xml

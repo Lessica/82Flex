@@ -1,5 +1,5 @@
 ---
-title: Receive Notification from somewhere else outside my iOS Application
+title: 为什么应用在后台收到了其它应用产生的键盘通知
 date: 2017-12-21 23:08:21
 tags: [iOS]
 ---
