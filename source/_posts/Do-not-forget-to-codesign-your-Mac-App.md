@@ -12,7 +12,7 @@ To codesign your Mac App, you need `developerID_application.cer` and `developerI
 
 When you request the certificates above, you should have received the **private key**, which can be exported to `Certificates.p12` in "Keychain Access".
 
-![asset_img](index/QQ20171030-113715.png)
+![asset_img](/QQ20171030-113715.png)
 
 # Codesign
 

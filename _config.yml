@@ -14,9 +14,8 @@ timezone: Asia/Shanghai
 ## If your site is put in a subdirectory, set url as 'http://yoursite.com/child' and root as '/child/'
 url: https://82flex.com
 root: /
-permalink: :year/:month/:day/:title/:urlname.html
+permalink: :year/:month/:day/:title.html
 permalink_defaults:
-  urlname: index
 
 # Directory
 source_dir: source
