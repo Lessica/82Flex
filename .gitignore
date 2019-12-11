@@ -1,4 +1,6 @@
-certs/
+/certs/
+/public/
+db.json
 
 # Created by https://www.gitignore.io/api/macos,code,node
 # Edit at https://www.gitignore.io/?templates=macos,code,node
